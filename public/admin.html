@@ -1,0 +1,194 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Admin Dashboard - QueueFlow</title><link rel="stylesheet" href="style.css"></head><body>
+<header class="header"><div class="logo"><div class="logo-box">Q</div><div><h1>QueueFlow</h1><small>Admin Dashboard</small></div></div><nav><a href="index.html">Home</a><a href="status.html">Status</a><a class="active" href="admin.html">Admin</a><a href="services.html">Services</a></nav></header>
+<main class="admin-page"><div class="section-heading"><small>ADMIN PANEL</small><h1>Queue Dashboard</h1></div>
+<div class="card admin-controls"><label for="serviceSelect">Select Service</label><select id="serviceSelect"><option value="">Select service</option></select><button class="btn primary" id="nextBtn" type="button">CALL NEXT TOKEN →</button>
+<div class="admin-action-buttons">
+<button class="btn success" id="completeBtn" type="button">✓ Complete</button>
+<button class="btn warning" id="skipBtn" type="button">↷ Skip</button>
+<button class="btn danger" id="cancelBtn" type="button">✕ Cancel</button>
+</div></div>
+<div class="admin-grid"><div class="card current-admin"><small>NOW SERVING</small><div class="admin-token" id="currentToken">---</div><h3 id="currentName">No token</h3><p id="currentService">Select a service</p></div>
+<div class="card"><small>TODAY'S STATISTICS</small><div class="admin-stats"><div><span>Total</span><strong id="total">0</strong></div><div><span>Waiting</span><strong id="waiting">0</strong></div><div><span>Serving</span><strong id="serving">0</strong></div><div><span>Completed</span><strong id="completed">0</strong></div><div><span>Cancelled</span><strong id="cancelled">0</strong></div><div><span>Skipped</span><strong id="skipped">0</strong></div></div></div></div>
+<div class="card queue-card"><div class="queue-header"><div><small>WAITING QUEUE</small><h2>Customers</h2></div><span id="queueCount">0 waiting</span></div><div id="queueList"><p>Select a service to view queue.</p></div></div></main>
+<script>
+const select = document.getElementById("serviceSelect");
+const list = document.getElementById("queueList");
+const nextBtn = document.getElementById("nextBtn");
+const actionButtons = [
+    document.getElementById("completeBtn"),
+    document.getElementById("skipBtn"),
+    document.getElementById("cancelBtn")
+];
+
+async function getJSON(url, options = {}) {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `Request failed (${response.status})`);
+    return data;
+}
+
+async function loadServices() {
+    try {
+        const data = await getJSON("/api/services");
+        select.innerHTML = '<option value="">Select service</option>';
+        data.services.forEach(service => {
+            const option = document.createElement("option");
+            option.value = service.id;
+            option.textContent = `${service.name} (${service.prefix})`;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        select.innerHTML = '<option value="">Unable to load services</option>';
+        alert("Unable to load services: " + error.message);
+    }
+}
+
+function setActionState(hasCurrentToken) {
+    actionButtons.forEach(button => button.disabled = !hasCurrentToken);
+}
+
+async function loadDashboard() {
+    const serviceId = select.value;
+    if (!serviceId) {
+        reset();
+        return;
+    }
+
+    try {
+        const [current, queue, stats] = await Promise.all([
+            getJSON(`/api/admin/current?serviceId=${encodeURIComponent(serviceId)}`),
+            getJSON(`/api/admin/queue?serviceId=${encodeURIComponent(serviceId)}`),
+            getJSON(`/api/admin/statistics?serviceId=${encodeURIComponent(serviceId)}`)
+        ]);
+
+        const currentToken = current.currentToken;
+        document.getElementById("currentToken").textContent = currentToken?.tokenNumber || "---";
+        document.getElementById("currentName").textContent = currentToken?.name || "No token";
+        document.getElementById("currentService").textContent =
+            currentToken?.serviceName || "No token currently serving";
+        setActionState(Boolean(currentToken));
+
+        document.getElementById("queueCount").textContent = `${queue.queue.length} waiting`;
+        list.innerHTML = "";
+
+        if (!queue.queue.length) {
+            list.innerHTML = "<p>No customers waiting.</p>";
+        } else {
+            queue.queue.forEach((token, index) => {
+                const item = document.createElement("div");
+                item.className = "queue-item";
+
+                const pos = document.createElement("div");
+                pos.className = "queue-position";
+                pos.textContent = index + 1;
+
+                const customer = document.createElement("div");
+                customer.className = "queue-customer";
+
+                const strong = document.createElement("strong");
+                strong.textContent = token.tokenNumber;
+
+                const span = document.createElement("span");
+                span.textContent = token.name;
+
+                customer.append(strong, span);
+
+                const status = document.createElement("span");
+                status.className = "waiting-status";
+                status.textContent = "Waiting";
+
+                item.append(pos, customer, status);
+                list.appendChild(item);
+            });
+        }
+
+        Object.entries(stats.statistics).forEach(([key, value]) => {
+            const element = document.getElementById(key);
+            if (element) element.textContent = value;
+        });
+    } catch (error) {
+        console.error("Dashboard error:", error);
+        list.innerHTML = `<p class="error-message">Unable to load dashboard: ${error.message}</p>`;
+    }
+}
+
+function reset() {
+    document.getElementById("currentToken").textContent = "---";
+    document.getElementById("currentName").textContent = "No token";
+    document.getElementById("currentService").textContent = "Select a service";
+    document.getElementById("queueCount").textContent = "0 waiting";
+    list.innerHTML = "<p>Select a service to view queue.</p>";
+    ["total", "waiting", "serving", "completed", "cancelled", "skipped"]
+        .forEach(id => document.getElementById(id).textContent = "0");
+    setActionState(false);
+}
+
+async function callNext() {
+    const serviceId = select.value;
+    if (!serviceId) {
+        alert("Please select a service.");
+        return;
+    }
+
+    nextBtn.disabled = true;
+    try {
+        const data = await getJSON("/api/admin/next", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ serviceId })
+        });
+        alert(data.message);
+        await loadDashboard();
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        nextBtn.disabled = false;
+    }
+}
+
+async function changeCurrent(action) {
+    const serviceId = select.value;
+    if (!serviceId) {
+        alert("Please select a service.");
+        return;
+    }
+
+    const button = action === "complete"
+        ? document.getElementById("completeBtn")
+        : action === "skip"
+            ? document.getElementById("skipBtn")
+            : document.getElementById("cancelBtn");
+
+    if (!confirm(`Mark the current token as ${action}?`)) return;
+
+    button.disabled = true;
+    try {
+        const data = await getJSON("/api/admin/action", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ serviceId, action })
+        });
+        alert(data.message);
+        await loadDashboard();
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        await loadDashboard();
+    }
+}
+
+select.addEventListener("change", loadDashboard);
+nextBtn.addEventListener("click", callNext);
+document.getElementById("completeBtn").addEventListener("click", () => changeCurrent("complete"));
+document.getElementById("skipBtn").addEventListener("click", () => changeCurrent("skip"));
+document.getElementById("cancelBtn").addEventListener("click", () => changeCurrent("cancel"));
+
+(async function init() {
+    await loadServices();
+    await loadDashboard();
+    setInterval(() => {
+        if (select.value) loadDashboard();
+    }, 3000);
+})();
+</script>
+</body></html>
